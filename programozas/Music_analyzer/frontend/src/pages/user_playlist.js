@@ -85,27 +85,28 @@ export default function SpotifyUserPlaylist() {
       const sum = totalDuration.reduce((a, b) => a + b, 0);
 
       const uniqueArtistIds = [...new Set(flat.flatMap((t) => t.artistIds || []))];
-      const genreLimit = 50;
+      // Spotify removed the batch GET /artists?ids=... for Dev Mode apps in Feb 2026,
+      // so the artists are requested one by one, a few at a time to stay under the rate limit.
+      const concurrency = 5;
       const genreCount = {};
 
-      for (let i = 0; i < uniqueArtistIds.length; i += genreLimit) {
-        const chunk = uniqueArtistIds.slice(i, i + genreLimit);
-        const artistUrl = "https://api.spotify.com/v1/artists?ids=" + chunk.join(",");
+      for (let i = 0; i < uniqueArtistIds.length; i += concurrency) {
+        const chunk = uniqueArtistIds.slice(i, i + concurrency);
+        const results = await Promise.allSettled(
+          chunk.map((id) => axios.get(`https://api.spotify.com/v1/artists/${id}`, { headers }))
+        );
 
-        try{
-        const artistRes = await axios.get(artistUrl, { headers });
-        const artists = artistRes.data.artists || [];
-
-        artists.forEach((artist) => {
-          (artist.genres || []).forEach((g) => {
+        results.forEach((r) => {
+          if (r.status !== "fulfilled") {
+            console.error("Error fetching artist genres:", r.reason);
+            return;
+          }
+          (r.value.data.genres || []).forEach((g) => {
             const genreName = g.trim().toLowerCase();
             if (!genreName) return;
             genreCount[genreName] = (genreCount[genreName] || 0) + 1;
           });
         });
-        } catch (e) {
-          console.error("Error fetching artist genres:", e);
-        }
       }
 
       setTracksPlaylist((tp) => ({ ...tp, [playlistId]: flat }));
@@ -116,8 +117,10 @@ export default function SpotifyUserPlaylist() {
     } catch (err) {
       const status = err?.response?.status;
       setError(
-        status === 401 || status === 403
-          ? "Hiányzó engedély a lejátszási lista trackekhez (playlist-read-private). Jelentkezz be újra."
+        status === 401
+          ? "A Spotify-munkamenet lejárt. Jelentkezz be újra."
+          : status === 403
+          ? "A Spotify ehhez a listához nem ad hozzáférést. Csak a saját vagy közösen szerkesztett lejátszási listák elemezhetők."
           : "A lejátszási lista trackjeinek lekérése sikertelen."
       );
     } finally {
@@ -174,6 +177,12 @@ export default function SpotifyUserPlaylist() {
         if (status === 401 || status === 403) handleLogOut();
       });
   }, [token]);
+
+    // Since Spotify's Feb 2026 Dev Mode changes the playlist contents are only
+    // returned for playlists the user owns or collaborates on, so only those are listed.
+    const analyzablePlaylists = user
+      ? playlists.filter((p) => p.owner?.id === user.id || p.collaborative)
+      : playlists;
 
     useEffect(() => {
       console.log('My playlists:', playlists);
@@ -243,12 +252,12 @@ export default function SpotifyUserPlaylist() {
               <h2>Lejátszási listáid</h2>
             </div>
             
-            {playlists.length === 0 ? (
-              <p>Nincs megjeleníthető playlist, vagy még tölt.</p>
+            {analyzablePlaylists.length === 0 ? (
+              <p>Nincs elemezhető playlist, vagy még tölt. A Spotify csak a saját és a közösen szerkesztett listák tartalmát adja ki.</p>
             ) : (
               <Accordion multiple={false} value={opened} onChange={(val) => {
                 setOpened(val);
-                const pl = playlists.find((p) => p.id === val);
+                const pl = analyzablePlaylists.find((p) => p.id === val);
                 if (pl) fetchPlaylistTracks(pl.id);
               }}
               variant="contained" radius="md" style={{ backgroundColor: "#FFF8E7", 
@@ -257,7 +266,7 @@ export default function SpotifyUserPlaylist() {
               }}
               >
 
-                {playlists.map((pl) => (
+                {analyzablePlaylists.map((pl) => (
                   <Accordion.Item key={pl.id} value={pl.id}>
                     <Accordion.Control>
                       <Group gap="md" wrap="nowrap">
@@ -269,7 +278,7 @@ export default function SpotifyUserPlaylist() {
                         </div>
                         <div>
                           <Text fw={600} size="sm" lineClamp={1}>{pl.name}</Text>
-                          <Text size="xs" c="dimmed">{pl.tracks?.total ?? 0 } dal
+                          <Text size="xs" c="dimmed">{pl.items?.total ?? pl.tracks?.total ?? 0 } dal
                             - {pl.owner?.display_name || "Ismeretlen"}
                           </Text>
                         </div>
@@ -360,7 +369,13 @@ export default function SpotifyUserPlaylist() {
                                           </List.Item>
                                           <List.Item>
                                             <Text fw={600} size="20px" mb={4}>Leggyakoribb műfajok a playlistben:</Text>
-                                            <Bar data={bar} options={barOptions} />
+                                            {genreValues.length === 0 ? (
+                                              <Text size="sm" c="dimmed">
+                                                A Spotify ehhez a listához nem adott műfajadatot az előadókról.
+                                              </Text>
+                                            ) : (
+                                              <Bar data={bar} options={barOptions} />
+                                            )}
                                           </List.Item>
                                         </List>
                                       </div>      

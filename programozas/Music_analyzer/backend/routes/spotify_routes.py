@@ -12,7 +12,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 @spotify_bp.route("/login")
 def login():
-    scopes = "user-read-private user-read-private playlist-read-private"
+    scopes = "user-read-private playlist-read-private playlist-read-collaborative"
     params = {
         "client_id": CLIENT_ID,
         "response_type": "code",
